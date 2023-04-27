@@ -1,0 +1,117 @@
+---
+title: "simulation_plot"
+author: "Jiahan Chen"
+date: "2023-04-26"
+output: html_document
+---
+
+# Simulation 1
+
+```{R overall plot}
+load("Simulation1_1.Rdata")
+load("Simulation1_LRA.Rdata")
+# first generate columns for iterations
+sizes <- expand.grid(size_1 = c(10, 20, 30), size_2 = c(10, 20, 30))
+res_iter1 = as.data.frame(res_iter1)
+res_iter1$size_1 = rep(sizes$size_1, each = 8)
+res_iter1$size_2 = rep(sizes$size_2, each = 8)
+res_iter1$FS = rep(rep(c("PCA", "UMAP"), each = 4), 9)
+res_iter1$CL = rep(c("hc", "km", "mc_1", "mc_2"), 18)
+res_iter1$method = paste(res_iter1$FS, res_iter1$CL, sep = "_")
+
+res_iter1_LRA = as.data.frame(res_iter1_LRA)
+res_iter1_LRA$size_1 = rep(sizes$size_1, each = 4)
+res_iter1_LRA$size_2 = rep(sizes$size_2, each = 4)
+res_iter1_LRA$FS = rep("LRA", 36)
+res_iter1_LRA$CL = rep(c("hc", "km", "mc_1", "mc_2"), 9)
+res_iter1_LRA$method = paste(res_iter1_LRA$FS, res_iter1_LRA$CL, sep = "_")
+
+# get the whole dataset
+res_iter1 = rbind(res_iter1, res_iter1_LRA)
+
+# convert resutls of each iterations in one column
+new_res1 <- as.data.frame(matrix(t(res_iter1[,1:500]), ncol = 1))
+colnames(new_res1) = "JaccardIndex"
+new_res1$Case = rep(res_iter1$size_1, each = 500)
+new_res1$Control = rep(res_iter1$size_2, each = 500)
+new_res1$FS = rep(res_iter1$FS, each = 500)
+new_res1$CL = rep(res_iter1$CL, each = 500)
+new_res1$method = rep(res_iter1$method, each = 500)
+
+library(ggplot2)
+
+boxplot1 = ggplot(new_res1, aes(x = method, y = JaccardIndex, fill = method)) +
+  geom_boxplot() + 
+  facet_grid(rows = vars(Control), cols = vars(Case), labeller = label_both) + 
+  xlab("Methods") + 
+  theme(#axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank()) +
+  ggtitle("Accuracy comparison of feature selection methods with varying population (dim = 10, simulation 1)")
+
+boxplot1
+
+```
+
+
+```{R paired-sample plot}
+equal_sample_res1 = new_res1[which(new_res1$Case == new_res1$Control),]
+equal_sample_res1$size = equal_sample_res1$Case + equal_sample_res1$Control
+
+boxplot1_1 = ggplot(data = equal_sample_res1, aes(x = CL, y = JaccardIndex, fill = CL)) +
+  geom_boxplot() + facet_grid(rows = vars(FS), cols = vars(size), labeller = 
+                                labeller(FS = label_value, size = label_both)) + 
+  xlab("Clustering method") + 
+  ggtitle("Boxplot with equal sample size (dim = 10, simulation 1)")
+boxplot1_1
+```
+
+
+# Simulation 2
+
+```{R Overall plot}
+load("Simulation2.Rdata")
+
+# first generate columns for iterations
+param_grid = expand.grid(prob = c(0.01, 0.02, 0.05), e = c(0, 0.5, 1))
+res_iter2 = as.data.frame(res_iter2)
+res_iter2$prob = rep(param_grid$prob, each = 8)
+res_iter2$e = rep(param_grid$e, each = 8)
+res_iter2$FS = rep(rep(c("PCA", "UMAP"), each = 4), 9)
+res_iter2$CL = rep(c("hc", "km", "mc_1", "mc_2"), 18)
+res_iter2$method = paste(res_iter2$FS, res_iter2$CL, sep = "_")
+
+# convert resutls of each iterations in one column
+new_res2 <- as.data.frame(matrix(t(res_iter2[,1:500]), ncol = 1))
+colnames(new_res2) = "JaccardIndex"
+new_res2$prob = rep(res_iter2$prob, each = 500)
+new_res2$e = rep(res_iter2$e, each = 500)
+new_res2$FS = rep(res_iter2$FS, each = 500)
+new_res2$CL = rep(res_iter2$CL, each = 500)
+new_res2$method = rep(res_iter2$method, each = 500)
+
+library(ggplot2)
+
+boxplot2 = ggplot(data = new_res2, aes(x = method, y = JaccardIndex, fill = method)) +
+  geom_boxplot() + 
+  facet_grid(rows = vars(prob), cols = vars(e), labeller = label_both) + 
+  xlab("Methods") + 
+  theme(#axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank()) +
+  ggtitle("Boxplot for methods PCA, UMAP (dim = 10, simulation 2)")
+
+boxplot2
+```
+
+```{R 5% plot}
+five_res2 = new_res2[which(new_res2$prob == 0.05), ]
+
+boxplot2_2 = ggplot(data = five_res2, aes(x = CL, y = JaccardIndex, fill = CL)) +
+  geom_boxplot() + 
+  facet_grid(rows = vars(FS), cols = vars(e), labeller = 
+               labeller(FS = label_value, e = label_both)) + 
+  xlab("Clustering method") + 
+  ggtitle("Boxplot with 5% DE genes for methods PCA, UMAP (dim = 10, simulation 2)")
+boxplot2_2
+```

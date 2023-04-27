@@ -1,0 +1,299 @@
+---
+title: "Simulation"
+author: "Jiahan Chen"
+date: "2023-04-19"
+output: html_document
+---
+
+# read in data
+
+```{R data}
+library(GEOquery)
+
+#data = getGEO(filename = './GSE13355/GSE13355_family.soft.gz')
+data = getGEO('GSE13355')
+expr = data$GSE13355_series_matrix.txt.gz@assayData$exprs
+
+
+pheno = data$GSE13355_series_matrix.txt.gz@phenoData@data$characteristics_ch1
+
+expr_1 = expr[,which(pheno != "uninvolved skin from cases")]
+
+pheno_1 = pheno[which(pheno != "uninvolved skin from cases")]
+save(file = "data_for_sim.Rdata", expr_1, pheno_1)
+
+
+```
+
+# Simulation 1
+
+```{R simulation 1}
+simulation_1 <- function(expression, annotation, size_1, size_2){
+  index_1 = which(annotation == "involved skin from cases")
+  index_2 = which(annotation == "normal skin from controls")
+  sample_1 = sample(index_1, size = size_1, replace = FALSE)
+  sample_2 = sample(index_2, size = size_2, replace = FALSE)
+  sim_expr = expression[,c(sample_1, sample_2)]
+  sim_pheno = annotation[c(sample_1, sample_2)]
+  return(list(sim_expr, sim_pheno))
+}
+
+jaccard_index <- function(prediction, label){
+  # rename label
+  label_rename = ifelse(label == "involved skin from cases", 1, 2)
+  
+  intersection = sum(prediction == label_rename)
+  union = length(prediction) + length(label_rename) - intersection
+  return (intersection/union)
+}
+
+#temp_sim = simulation_1(expression = expr_1, annotation = pheno_1, size_1 = 5, size_2 = 10)
+```
+
+```{R simulation 1 analysis}
+source("functions.R")
+load("data_for_sim.Rdata")
+
+library(foreach)
+library(doSNOW)
+
+# Define the input variables for the foreach loop
+sizes <- expand.grid(size_1 = c(10, 20, 30), size_2 = c(10, 20, 30))
+
+cl <- makeCluster(16)
+registerDoSNOW(cl)
+iterations <- 500
+pb <- txtProgressBar(max = iterations*nrow(sizes), style = 3)
+progress <- function(n) setTxtProgressBar(pb, n)
+opts <- list(progress = progress)
+
+
+
+res_iter1 = matrix(0,nrow = 72, ncol = iterations)
+
+res_iter1 <- foreach (iter = 1:iterations, .combine = cbind)%:%
+  foreach(j = 1:nrow(sizes), .combine = c, .options.snow = opts)%dopar%{
+    set.seed(iter)
+    size_1 = sizes[j,1]
+    size_2 = sizes[j,2]
+    
+    sim = simulation_1(expression = expr_1, annotation = pheno_1,
+                       size_1 = size_1, size_2 = size_2)
+    sim_expr = sim[[1]]
+    sim_pheno = sim[[2]]
+      
+    for (fs in c('PCA', 'UMAP')) {
+      temp_FS = FS_wrapper(x = sim_expr, method = fs, m = 10)
+        
+      for (cl in c("hc", "km", "mc")) {
+        if (cl == "mc"){ # 2 scenarios for mclust
+          for (ind in 1:2) {# indicator of specifying K
+            if (ind == 1){
+              temp_CL = cluster_wrapper(x = temp_FS, method = cl, K = NULL)
+            } else {
+              temp_CL = cluster_wrapper(x = temp_FS, method = cl, K = 2)
+            }
+            temp_jac = jaccard_index(prediction = temp_CL$cls,
+                                     label = sim_pheno)
+            assign(paste(fs, cl, ind, "res", sep = "_"), temp_jac)
+          }
+        } else {
+          temp_CL = cluster_wrapper(x = temp_FS, method = cl)
+          temp_jac = jaccard_index(prediction = temp_CL$cls,
+                                   label = sim_pheno)
+          assign(paste(fs, cl, "res", sep = "_"), temp_jac)
+        }
+          
+      }
+    }
+    c(PCA_hc_res, PCA_km_res, PCA_mc_1_res, PCA_mc_2_res,
+      UMAP_hc_res, UMAP_km_res, UMAP_mc_1_res, UMAP_mc_2_res)
+  }
+
+
+#res_iter1 = as.data.frame(res_iter1)
+#res_iter1$size_1 = rep(sizes$size_1, each = 8)
+#res_iter1$size_2 = rep(sizes$size_2, each = 8)
+#res_iter1$FS = rep(rep(c("PCA", "UMAP"), each = 4), 9)
+#res_iter1$CL = rep(c("hc", "km", "mc_1", "mc_2"), 18)
+#res_iter1$method = paste(res_iter1$FS, res_iter1$CL, sep = "_")
+
+save(file = "Simulation1_1.Rdata", res_iter1)
+
+close(pb)
+stopCluster(cl) 
+```
+
+```{R simulation 1 plot}
+load("Simulation1_1.Rdata")
+
+# first generate columns for iterations
+sizes <- expand.grid(size_1 = c(10, 20, 30), size_2 = c(10, 20, 30))
+res_iter1 = as.data.frame(res_iter1)
+res_iter1$size_1 = rep(sizes$size_1, each = 8)
+res_iter1$size_2 = rep(sizes$size_2, each = 8)
+res_iter1$FS = rep(rep(c("PCA", "UMAP"), each = 4), 9)
+res_iter1$CL = rep(c("hc", "km", "mc_1", "mc_2"), 18)
+res_iter1$method = paste(res_iter1$FS, res_iter1$CL, sep = "_")
+
+# convert resutls of each iterations in one column
+new_res1 <- as.data.frame(matrix(t(res_iter1[,1:500]), ncol = 1))
+colnames(new_res1) = "JaccardIndex"
+new_res1$size_1 = rep(res_iter1$size_1, each = 500)
+new_res1$size_2 = rep(res_iter1$size_2, each = 500)
+new_res1$method = rep(res_iter1$method, each = 500)
+
+library(ggplot2)
+
+boxplot1 = ggplot(data = new_res1, aes(x = method, y = JaccardIndex, fill = method)) +
+  geom_boxplot() + facet_grid(rows = vars(size_1), cols = vars(size_2)) + 
+  xlab("Methods") + 
+  theme(#axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank()) +
+  ggtitle("Boxplot for methods PCA, UMAP (dim = 10, simulation 1)")
+
+boxplot1
+```
+
+# Simulation 2
+
+```{R simulation 2 analysis}
+source("functions.R")
+load("data_for_sim.Rdata")
+# expr_1 p x n: p genes, n samples
+# pheno_1: length n
+library(foreach)
+library(doSNOW)
+
+
+param_grid = expand.grid(prob = c(0.01, 0.02, 0.05), e = c(0, 0.5, 1))
+
+cl <- makeCluster(parallel::detectCores())
+registerDoSNOW(cl)
+iterations <- 500
+pb <- txtProgressBar(max = iterations*nrow(param_grid), style = 3)
+progress <- function(n) setTxtProgressBar(pb, n)
+opts <- list(progress = progress)
+
+
+
+# 1.1 get the mean and std for each gene based on control group
+control_index = which(pheno_1 == "normal skin from controls")
+mean_control = apply(expr_1[,control_index], 1, mean)
+sd_control = apply(expr_1[,control_index], 1, sd)
+  
+# 1.2 generate 200 expressions for each gene based on 
+# mean and std from control group
+sim_expr = sapply(1:nrow(expr_1), FUN = function(x){
+  rnorm(200,mean = mean_control[x], sd = sd_control[x])
+})
+  
+sim_expr = t(sim_expr)
+
+# 2. randomly assign 2 groups
+case_sim = sort(sample(1:200, 100, replace = FALSE))
+control_sim = setdiff(1:200, case_sim)
+sim_pheno = ifelse(1:200 %in% case_sim, "involved skin from cases", "normal skin from controls")
+
+# create matrix to store results
+res_iter2 = matrix(0,nrow = 72, ncol = iterations)
+
+# repeat step 3 and 4
+res_iter2 = foreach (i = 1:nrow(param_grid), .combine = rbind)%:%
+   foreach(iter = 1: iterations, .combine = cbind, .options.snow = opts)%dopar%{
+     set.seed(iter)
+     prob = param_grid[i, 1]
+     e = param_grid[i, 2]
+     
+     # 3. randomly sample DE genes based on prob
+     sim_DE_index = sample(1:nrow(sim_expr), 
+                           size = ceiling(prob*nrow(sim_expr)),
+                           replace = FALSE)
+     
+     # 4. generate the count of these selected DE genes for case groups
+     sim_DE_count = sapply(1:length(sim_DE_index),
+                           FUN = function(x){
+                             new_mean = mean_control[x]+ 
+                               rnorm(1, e, 0.5)*sd_control[x]
+                             rnorm(100,new_mean, sd_control[x])
+                           })
+     sim_expr[sim_DE_index, case_sim] = t(sim_DE_count)
+     
+     # for each iteration, start analysis
+     for (fs in c('PCA', 'UMAP')) {
+      temp_FS = FS_wrapper(x = sim_expr, method = fs, m = 10)
+        
+      for (cl in c("hc", "km", "mc")) {
+        if (cl == "mc"){ # 2 scenarios for mclust
+          for (ind in 1:2) {# indicator of specifying K
+            if (ind == 1){
+              temp_CL = cluster_wrapper(x = temp_FS, method = cl, K = NULL)
+            } else {
+              temp_CL = cluster_wrapper(x = temp_FS, method = cl, K = 2)
+            }
+            temp_jac = jaccard_index(prediction = temp_CL$cls,
+                                     label = sim_pheno)
+            assign(paste(fs, cl, ind, "res", sep = "_"), temp_jac)
+          }
+        } else {
+          temp_CL = cluster_wrapper(x = temp_FS, method = cl)
+          temp_jac = jaccard_index(prediction = temp_CL$cls,
+                                   label = sim_pheno)
+          assign(paste(fs, cl, "res", sep = "_"), temp_jac)
+        }
+          
+      }
+    }
+    c(PCA_hc_res, PCA_km_res, PCA_mc_1_res, PCA_mc_2_res,
+      UMAP_hc_res, UMAP_km_res, UMAP_mc_1_res, UMAP_mc_2_res)
+                          
+  }
+  
+save(file = "Simulation2.Rdata", res_iter2)
+
+#res_iter2 = as.data.frame(res_iter2)
+#res_iter2$prob = rep(param_grid$prob, each = 8)
+#res_iter2$e = rep(param_grid$e, each = 8)
+#res_iter2$FS = rep(rep(c("PCA", "UMAP"), each = 4), 9)
+#res_iter2$CL = rep(c("hc", "km", "mc_1", "mc_2"), 18)
+#res_iter2$method = paste(res_iter2$FS, res_iter2$CL, sep = "_")
+
+
+close(pb)
+stopCluster(cl) 
+```
+
+```{R simulation 2 plot}
+load("Simulation2.Rdata")
+
+# first generate columns for iterations
+param_grid = expand.grid(prob = c(0.01, 0.02, 0.05), e = c(0, 0.5, 1))
+res_iter2 = as.data.frame(res_iter2)
+res_iter2$prob = rep(param_grid$prob, each = 8)
+res_iter2$e = rep(param_grid$e, each = 8)
+res_iter2$FS = rep(rep(c("PCA", "UMAP"), each = 4), 9)
+res_iter2$CL = rep(c("hc", "km", "mc_1", "mc_2"), 18)
+res_iter2$method = paste(res_iter2$FS, res_iter2$CL, sep = "_")
+
+# convert resutls of each iterations in one column
+new_res2 <- as.data.frame(matrix(t(res_iter2[,1:500]), ncol = 1))
+colnames(new_res2) = "JaccardIndex"
+new_res2$prob = rep(res_iter2$prob, each = 500)
+new_res2$e = rep(res_iter2$e, each = 500)
+new_res2$method = rep(res_iter2$method, each = 500)
+
+library(ggplot2)
+
+boxplot2 = ggplot(data = new_res2, aes(x = method, y = JaccardIndex, fill = method)) +
+  geom_boxplot() + facet_grid(rows = vars(prob), cols = vars(e)) + 
+  xlab("Methods") + 
+  theme(#axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank()) +
+  ggtitle("Boxplot for methods PCA, UMAP (dim = 10, simulation 2)")
+
+boxplot2
+
+
+```
